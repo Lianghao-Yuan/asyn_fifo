@@ -1,0 +1,16 @@
+<session version="1.1" release="I-2014.03" timestp="2015-08-01 02:00:01 GMT">
+  <hvp>
+    <datadef>
+      <metdef name="Assert" type="ratio" aggregator="average" builtin="1" />
+    </datadef>
+  </hvp>
+  <old_coverage>
+  <scope type="top" name="top">
+    <metric name="Assert" value="4/6" />
+  </scope>
+  <scope type="instance" name="top">
+  </scope>
+  <scope type="group" name="top">
+  </scope>
+  </old_coverage>
+</session>
