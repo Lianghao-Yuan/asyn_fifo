@@ -44,55 +44,49 @@ module asyn_fifo #
   input clk_rd,
   input clk_wr,
   // Flags
-  output reg full,
-  output reg empty
+  output full,
+  output empty
 );
 // read and write pointer
 reg [ADDR_WIDTH-1:0] rd_ptr;
 reg [ADDR_WIDTH-1:0] wr_ptr;
 
+// Old read & write pointer (for flag generation)
+reg [ADDR_WIDTH-1:0] old_rd_ptr;
+reg [ADDR_WIDTH-1:0] old_wr_ptr;
+
 // Synchronized pointers
 reg [ADDR_WIDTH-1:0] sync_rd_ptr;
 reg [ADDR_WIDTH-1:0] sync_wr_ptr;
 
-// Registered signals (sampled by appropriate clock)
-// We register write control signal so that there's a complete cycle for
-// memory to write data in, in order to avoid metastability or hazard.
-reg [3:0] wr_ptr_reg; // Ptr for RAM
-reg wr_en_reg; // Wr_en for RAM
+// Registered flag
+reg full_reg;
+reg empty_reg;
 
-// Synchronized data signal
-reg [DATA_WIDTH-1:0] data_in_reg;
-reg [DATA_WIDTH-1:0] data_out_reg;
+reg [DATA_WIDTH-1:0] fifo_ram [0:DATA_DEPTH-1];
 
-
-// Old pointer (for calculation of full & empty flags)
-reg [3:0] old_wr_ptr;
-reg [3:0] old_rd_ptr;
+// -------------------------------
+// Full & Empty flag generation //
+// -------------------------------
+assign full  = (wr_ptr == sync_rd_ptr) && ((wr_ptr == old_wr_ptr + 1) || full_reg);
+assign empty = (rd_ptr == sync_wr_prt) && ((rd_ptr == old_rd_ptr + 1) || empty_reg);
 
 // -------------------
 // FIFO write logic //
 // -------------------
 always @ (posedge clk_wr or negedge rst_n) begin
   if(!rst_n) begin
-    wr_ptr <= 1'b0;
-    old_wr_ptr <= 1'b0;
-    wr_ptr_reg <= 4'b0;
-    wr_en_reg <= 1'b0;
-    data_in_reg <= 0;
+    wr_ptr <= 'b0;
+    old_wr_ptr <= 'b0;
+    full_reg <= full;
   end
   else begin
-    // Update old pointer
     old_wr_ptr <= wr_ptr;
-    if(!full) begin
+    full_reg <= full;
+    if(!full && wr_en) begin
       // Register all write-related signals
-      data_in_reg <= data_in;
-      wr_en_reg <= wr_en;
-      // Update pointer
-      if(wr_en) begin
-        wr_ptr_reg <= wr_ptr;
-        wr_ptr <= wr_ptr + 1;
-      end
+      fifo_ram[wr_ptr] <= data_in;
+      wr_ptr <= wr_ptr + 1;
     end
   end
 end
@@ -102,16 +96,15 @@ end
 // ------------------
 always @ (posedge clk_rd or negedge rst_n) begin
   if(!rst_n) begin
-    rd_ptr <= 1'b0;
-    old_rd_ptr <= 1'b0;
-    data_out <= 0;
+    rd_ptr <= 'b0;
+    old_rd_ptr <= 'b0;
+    empty_reg <= 1'b1;    
   end
   else begin
     old_rd_ptr <= rd_ptr;
-    if((!empty) && rd_en) begin
-      // Generate output
-      data_out <= data_out_reg;
-      // Update pointers
+    empty_reg <= empty;
+    if(!empty && rd_en) begin
+      data_out <= fifo_ram[rd_ptr];
       rd_ptr <= rd_ptr + 1;
     end
   end
@@ -121,93 +114,49 @@ end
 // Synchronization logic //
 // ------------------------
 // Read-to-write pointer sync
+wire [ADDR_WIDTH-1:0] rd2wr_gray_in;
+wire [ADDR_WIDTH-1:0] rd2wr_gray_out;
+
+bin2gray #(.WIDTH(ADDR_WIDTH))
+rd2wr_bin2gray(
+  .bin_i(rd_ptr),
+  .gray_o(rd2wr_gray_in)
+);
+
 synchronizer #(.WIDTH(ADDR_WIDTH))
 rd2wr(
   .clk(clk_wr),
-  .data_in(rd_ptr),
-  .data_out(sync_rd_ptr)
+  .data_in(rd2wr_gray_in),
+  .data_out(rd2wr_gray_out)
+);
+
+gray2bin #(.WIDTH(ADDR_WIDTH))
+rd2wr_gray2bin(
+  .gray_i(rd2wr_gray_out),
+  .bin_o(sync_rd_ptr)
 );
 
 // Write-to-read pointer sync
+wire [ADDR_WIDTH-1:0] wr2rd_gray_in;
+wire [ADDR_WIDTH-1:0] wr2rd_gray_out;
+
+bin2gray #(.WIDTH(ADDR_WIDTH))
+wr2rd_bin2gray(
+  .bin_i(wr_ptr),
+  .gray_o(wr2rd_gray_in)
+);
+
 synchronizer #(.WIDTH(ADDR_WIDTH))
 wr2rd(
   .clk(clk_rd),
-  .data_in(wr_ptr),
-  .data_out(sync_wr_ptr)
+  .data_in(wr2rd_gray_in),
+  .data_out(wr2rd_gray_out)
 );
 
-// --------------------------------
-// FIFO full & empty flags logic //
-// --------------------------------
-// Since we use two-stage synchronizer, potential pointer delay is 2 cycles.
-// So we should be pessimistic in calculating flags.
-//
-// Empty flag
-always @ (posedge clk_rd or negedge rst_n) begin
-  if(!rst_n) begin
-    empty <= 1'b1;
-  end
-  // Only set the boundary conditions here.
-  // Since ptr can only increment in inverval of one, it cannot skip the
-  // boundary we set.
-  else begin
-    if(sync_wr_ptr == rd_ptr + 2) begin
-      empty <= 1'b1;
-    end
-    else if(sync_wr_ptr == rd_ptr + 3) begin
-      empty <= 1'b0;
-    end
-    else begin
-      empty <= empty;
-    end
-  end
-end
-
-// Full flag
-always @ (posedge clk_wr or negedge rst_n) begin
-  if(!rst_n) begin
-    full <= 1'b0;
-  end
-  // Only set the boundary conditions here.
-  // Since ptr can only increment in inverval of one, it cannot skip the
-  // boundary we set.
-  else begin
-    if(sync_rd_ptr == wr_ptr + 2) begin
-      full <= 1'b1;
-    end
-    else if(sync_rd_ptr == wr_ptr + 3) begin
-      full <= 1'b0;
-    end
-    else begin
-      full <= full;
-    end
-  end
-end
-
-// --------------------
-// RAM instantiation //
-// --------------------
-asyn_dual_port_ram #
-(
-  .DATA_WIDTH(DATA_WIDTH),
-  .ADDR_WIDTH(ADDR_WIDTH),
-  .DATA_DEPTH(DATA_DEPTH)
-)
-RAM(
-  // Port 0 is for write (since port 0 has higher priority on write)
-  .addr_0(old_wr_ptr),
-  //.cs_0(wr_en_reg),
-  .clk_0(clk_wr),
-  .we_0(1'b1),
-  .oe_0(wr_en_reg),
-  .data_0(data_in_reg),
-  // Port 1 is for read
-  // We keeps reading memory
-  .addr_1(rd_ptr),
-  //.cs_1(1'b1),
-  .we_1(1'b0),
-  .oe_1(1'b1),
-  .data_1(data_out_reg)
+gray2bin #(.WIDTH(ADDR_WIDTH))
+wr2rd_gray2bin(
+  .gray_i(wr2rd_gray_out),
+  .bin_o(sync_wr_ptr)
 );
 
 endmodule // asyn_fifo

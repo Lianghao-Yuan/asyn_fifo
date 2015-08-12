@@ -35,31 +35,14 @@ module synchronizer #
   input [WIDTH-1:0] data_in, //Data_in is binary code
   output [WIDTH-1:0] data_out // Data_out is binary code
 );
-// Data on the synchronization path is gray code
-// Below is gray-coded data on different stages
-reg [WIDTH-1:0] gray_0;
-reg [WIDTH-1:0] gray_1;
-reg [WIDTH-1:0] gray_2;
-
-// First stage: binary to gray
-bin2gray #(.WIDTH(WIDTH))
-m_bin2gray(
-  .bin_i(data_in),
-  .gray_o(gray_0)
-);
+// Data intermediate
+reg [WIDTH-1:0] data_interm;
 
 // Second & third stage: through first & second synchronizer flip-flops
 always @ (posedge clk) begin
-  gray_1 <= gray_0;
-  gray_2 <= gray_1;
+  data_interm <= data_in;
+  data_out <= data_interm;
 end
-
-// Fourth stage: gray to binary
-gray2bin #(.WIDTH(WIDTH))
-m_gray2bin(
-  .gray_i(gray_2),
-  .bin_o(data_out)
-);
 
 endmodule // synchronizer
 
